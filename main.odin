@@ -4,7 +4,19 @@ import "core:fmt"
 import "core:math"
 import "core:math/cmplx"
 import "core:thread"
+
+import gl "vendor:OpenGL"
 import rl "vendor:raylib"
+import "vendor:raylib/rlgl"
+
+// raylib does not have the option to set double uniforms by default
+// so we need to manually call glUniform
+foreign _ {
+    glfwGetProcAddress :: proc(name: cstring) -> rawptr ---
+}
+gl_set_proc_address :: proc(p: rawptr, name: cstring) {
+    (^rawptr)(p)^ = glfwGetProcAddress(name)
+}
 
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
@@ -12,9 +24,9 @@ WINDOW_HEIGHT :: 720
 RESX :: WINDOW_WIDTH
 RESY :: WINDOW_HEIGHT
 
-THREAD_COUNT :: 10
+THREAD_COUNT :: 12
 
-ZOOM_STEP :: 0.7
+ZOOM_STEP :: 0.9
 DEFAULT_CAM_X :: -0.5
 DEFAULT_CAM_Y :: 0.0
 DEFAULT_CAM_W :: 3.14
@@ -31,120 +43,26 @@ Fractal :: enum {
     Burning_Ship,
 }
 
-Thread_Context :: struct {
-    id:          i32,
-    fractal:     Fractal,
-    cam:         ^Camera,
-    surface:     ^rl.Image,
-
-    // state
-    start_draw:  bool,
-    is_done:     bool,
-    should_quit: bool,
-}
-
-
-threads: [THREAD_COUNT]Thread_Context
-
 camera_scale :: proc(cam: Camera, x, y: f32) -> (f64, f64) {
     scaled_x := f64(x) * cam.w / f64(RESX)
     scaled_y := f64(y) * cam.h / f64(RESY) // we want 0,0 in the center for easier positioning
     return scaled_x, scaled_y
 }
 
-screen_to_point :: proc(cam: Camera, x, y: i32) -> (f64, f64) {
-    scaled_x, scaled_y := camera_scale(cam, f32(x), f32(y))
+screen_to_point :: proc(cam: Camera, x, y: f32) -> (f64, f64) {
+    scaled_x, scaled_y := camera_scale(cam, x, y)
 
     cr := cam.x + (scaled_x - cam.w / 2.0)
     ci := cam.y + (scaled_y - cam.h / 2.0)
     return cr, ci
 }
 
-
-MAX_VALUE :: 500
-draw_mandlebrot :: proc(surface: ^rl.Image, camera: Camera, start_x, start_y, width, height: i32) {
-
-    for y in start_y ..< start_y + height {
-        for x in start_x ..< start_x + width {
-
-            cr, ci := screen_to_point(camera, x, y)
-
-            c: complex128 = complex(cr, ci)
-            z: complex128
-
-            value := MAX_VALUE
-            for i in 0 ..< MAX_VALUE {
-                z = z * z + c
-                if abs(z) > 2 {
-                    value = i
-                    break
-                }
-            }
-            gray := u8(255 * value / MAX_VALUE)
-            rl.ImageDrawPixel(surface, i32(x), i32(y), {gray, gray, gray, 255})
-        }
-    }
-
-}
-
-render_proc :: proc(ctx: ^Thread_Context) {
-    h: i32 = RESY / THREAD_COUNT
-    y := ctx.id * h
-    // last thread will have more/less pixels to work on
-    if ctx.id == THREAD_COUNT - 1 {
-        h = RESY - y
-    }
-
-    for !ctx.should_quit {
-
-        for !ctx.start_draw {}
-        ctx.is_done = false
-        ctx.start_draw = false
-
-        switch ctx.fractal {
-        case .Mandlebrot:
-            {
-                draw_mandlebrot(ctx.surface, ctx.cam^, 0, y, RESX, h)
-            }
-        case .Julia_Set:
-        case .Burning_Ship:
-        }
-        ctx.is_done = true
-    }
-}
-
-// get threads to start rendering and wait for all to finnish
-render_and_wait :: proc() {
-    for i in 0 ..< THREAD_COUNT {
-        threads[i].start_draw = true
-    }
-
-    wait_idx := 0
-    for wait_idx < THREAD_COUNT {
-        if threads[wait_idx].is_done {
-            wait_idx += 1
-        }
-    }
-}
-
-spawn_threads :: proc(surface: ^rl.Image, cam: ^Camera) {
-    for i in 0 ..< THREAD_COUNT {
-        ctx := Thread_Context {
-            id      = i32(i),
-            fractal = .Mandlebrot,
-            cam     = cam,
-            surface = surface,
-        }
-        threads[i] = ctx
-        thread.run_with_poly_data(&threads[i], render_proc, context)
-    }
-}
-
 main :: proc() {
 
+    rl.SetConfigFlags({.MSAA_4X_HINT})
     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Fractals!")
-    rl.SetTargetFPS(60)
     defer rl.CloseWindow()
+    rl.SetTargetFPS(60)
 
     camera := Camera {
         x = DEFAULT_CAM_X,
@@ -153,10 +71,25 @@ main :: proc() {
         h = DEFAULT_CAM_H,
     }
 
-    surface := rl.GenImageColor(RESX, RESY, rl.WHITE)
-    target := rl.LoadTextureFromImage(surface)
+    gl.load_up_to(4, 3, gl_set_proc_address)
+    shader := rl.LoadShader(nil, "shaders/mandlebrot.frag")
 
-    spawn_threads(&surface, &camera)
+    // Shader Locs
+    res := rl.Vector2{WINDOW_WIDTH, WINDOW_HEIGHT}
+    rl.SetShaderValue(shader, 1, &res, .VEC2)
+
+    cam_loc_x := rl.GetShaderLocation(shader, "cam.x")
+    cam_loc_y := rl.GetShaderLocation(shader, "cam.y")
+    cam_loc_w := rl.GetShaderLocation(shader, "cam.w")
+    cam_loc_h := rl.GetShaderLocation(shader, "cam.h")
+
+    itter_loc := rl.GetShaderLocation(shader, "itterations")
+    z_value_loc := rl.GetShaderLocation(shader, "zValue")
+
+    z_value := rl.Vector2{0, 0}
+    itterations: i32 = 500
+    rl.SetShaderValue(shader, z_value_loc, &z_value, .VEC2)
+    rl.SetShaderValue(shader, itter_loc, &itterations, .INT)
 
     for !rl.WindowShouldClose() {
 
@@ -167,24 +100,37 @@ main :: proc() {
             camera.y -= dy
         }
         scroll := rl.GetMouseWheelMove()
-        if scroll > 0.0 {
+        mouse_pos := rl.GetMousePosition()
+        if scroll > 0.0 || rl.IsKeyDown(.EQUAL) {
+            mouse_x, mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
             camera.w *= ZOOM_STEP
             camera.h = camera.w * f64(WINDOW_HEIGHT) / f64(WINDOW_WIDTH)
-        } else if scroll < 0.0 {
+            new_mouse_x, new_mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
+            camera.x -= (new_mouse_x - mouse_x)
+            camera.y -= (new_mouse_y - mouse_y)
+        } else if scroll < 0.0 || rl.IsKeyDown(.MINUS) {
+            mouse_x, mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
             camera.w /= ZOOM_STEP
             camera.h = camera.w * f64(WINDOW_HEIGHT) / f64(WINDOW_WIDTH)
+            new_mouse_x, new_mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
+            camera.x -= (new_mouse_x - mouse_x)
+            camera.y -= (new_mouse_y - mouse_y)
         }
 
-        render_and_wait()
-        rl.UpdateTexture(target, surface.data)
+        rlgl.EnableShader(shader.id)
+        gl.Uniform1d(cam_loc_x, camera.x)
+        gl.Uniform1d(cam_loc_y, camera.y)
+        gl.Uniform1d(cam_loc_w, camera.w)
+        gl.Uniform1d(cam_loc_h, camera.h)
 
         rl.BeginDrawing()
-        src := rl.Rectangle{0, 0, f32(target.width), f32(target.height)}
-        dst := rl.Rectangle{0, 0, WINDOW_WIDTH, WINDOW_HEIGHT}
-        rl.DrawTexturePro(target, src, dst, rl.Vector2(0), 0, rl.WHITE)
+        rl.ClearBackground(rl.BLACK)
+
+        rl.BeginShaderMode(shader)
+        rl.DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, rl.WHITE)
+        rl.EndShaderMode()
 
         rl.DrawFPS(10, 10)
         rl.EndDrawing()
-
     }
 }
