@@ -26,7 +26,7 @@ RESY :: WINDOW_HEIGHT
 
 THREAD_COUNT :: 12
 
-ZOOM_STEP :: 0.9
+ZOOM_FACTOR :: 0.8
 DEFAULT_CAM_X :: -0.5
 DEFAULT_CAM_Y :: 0.0
 DEFAULT_CAM_W :: 3.14
@@ -55,6 +55,22 @@ screen_to_point :: proc(cam: Camera, x, y: f32) -> (f64, f64) {
     cr := cam.x + (scaled_x - cam.w / 2.0)
     ci := cam.y + (scaled_y - cam.h / 2.0)
     return cr, ci
+}
+
+zoom :: proc(cam: ^Camera, step: f64, dir: i32) {
+    if dir == 0 do return
+
+    mouse_pos := rl.GetMousePosition()
+    mouse_x, mouse_y := screen_to_point(cam^, mouse_pos.x, mouse_pos.y)
+    if dir > 0 {
+        cam.w *= step
+    } else {
+        cam.w /= step
+    }
+    cam.h = cam.w * f64(WINDOW_HEIGHT) / f64(WINDOW_WIDTH)
+    new_mouse_x, new_mouse_y := screen_to_point(cam^, mouse_pos.x, mouse_pos.y)
+    cam.x -= (new_mouse_x - mouse_x)
+    cam.y -= (new_mouse_y - mouse_y)
 }
 
 main :: proc() {
@@ -100,21 +116,15 @@ main :: proc() {
             camera.y -= dy
         }
         scroll := rl.GetMouseWheelMove()
-        mouse_pos := rl.GetMousePosition()
-        if scroll > 0.0 || rl.IsKeyDown(.EQUAL) {
-            mouse_x, mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
-            camera.w *= ZOOM_STEP
-            camera.h = camera.w * f64(WINDOW_HEIGHT) / f64(WINDOW_WIDTH)
-            new_mouse_x, new_mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
-            camera.x -= (new_mouse_x - mouse_x)
-            camera.y -= (new_mouse_y - mouse_y)
-        } else if scroll < 0.0 || rl.IsKeyDown(.MINUS) {
-            mouse_x, mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
-            camera.w /= ZOOM_STEP
-            camera.h = camera.w * f64(WINDOW_HEIGHT) / f64(WINDOW_WIDTH)
-            new_mouse_x, new_mouse_y := screen_to_point(camera, mouse_pos.x, mouse_pos.y)
-            camera.x -= (new_mouse_x - mouse_x)
-            camera.y -= (new_mouse_y - mouse_y)
+
+        if scroll > 0.0 {
+            zoom(&camera, ZOOM_FACTOR, 1)
+        } else if rl.IsKeyDown(.SPACE) {
+            zoom(&camera, 0.98, 1)
+        } else if scroll < 0.0 {
+            zoom(&camera, ZOOM_FACTOR, -1)
+        } else if rl.IsKeyDown(.LEFT_CONTROL) {
+            zoom(&camera, 0.98, -1)
         }
 
         rlgl.EnableShader(shader.id)
