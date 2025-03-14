@@ -18,15 +18,16 @@ gl_set_proc_address :: proc(p: rawptr, name: cstring) {
     (^rawptr)(p)^ = glfwGetProcAddress(name)
 }
 
-WINDOW_WIDTH :: 1280
-WINDOW_HEIGHT :: 720
+WINDOW_WIDTH :: 1600
+WINDOW_HEIGHT :: 900
 
 RESX :: WINDOW_WIDTH
 RESY :: WINDOW_HEIGHT
 
-THREAD_COUNT :: 12
-
 ZOOM_FACTOR :: 0.8
+ITER_STEP :: 20
+MAX_ITER :: 2000
+
 DEFAULT_CAM_X :: -0.5
 DEFAULT_CAM_Y :: 0.0
 DEFAULT_CAM_W :: 3.14
@@ -37,15 +38,15 @@ Camera :: struct {
     w, h: f64,
 }
 
-Fractal :: enum {
-    Mandlebrot,
+Fractal :: enum i32 {
+    Mandlebrot = 0,
     Julia_Set,
-    Burning_Ship,
+    Count,
 }
 
 camera_scale :: proc(cam: Camera, x, y: f32) -> (f64, f64) {
-    scaled_x := f64(x) * cam.w / f64(RESX)
-    scaled_y := f64(y) * cam.h / f64(RESY) // we want 0,0 in the center for easier positioning
+    scaled_x := f64(x) * cam.w / f64(WINDOW_WIDTH)
+    scaled_y := f64(y) * cam.h / f64(WINDOW_HEIGHT) // we want 0,0 in the center for easier positioning
     return scaled_x, scaled_y
 }
 
@@ -86,12 +87,13 @@ main :: proc() {
         w = DEFAULT_CAM_W,
         h = DEFAULT_CAM_H,
     }
+    fractal: Fractal = .Mandlebrot
 
     gl.load_up_to(4, 3, gl_set_proc_address)
-    shader := rl.LoadShader(nil, "shaders/mandlebrot.frag")
+    shader := rl.LoadShader(nil, "shaders/fractals.frag")
 
     // Shader Locs
-    res := rl.Vector2{WINDOW_WIDTH, WINDOW_HEIGHT}
+    res := rl.Vector2{RESX, RESY}
     rl.SetShaderValue(shader, 1, &res, .VEC2)
 
     cam_loc_x := rl.GetShaderLocation(shader, "cam.x")
@@ -99,15 +101,15 @@ main :: proc() {
     cam_loc_w := rl.GetShaderLocation(shader, "cam.w")
     cam_loc_h := rl.GetShaderLocation(shader, "cam.h")
 
-    itter_loc := rl.GetShaderLocation(shader, "itterations")
+    iter_loc := rl.GetShaderLocation(shader, "iterations")
+    type_loc := rl.GetShaderLocation(shader, "fractalType")
     z_value_loc := rl.GetShaderLocation(shader, "zValue")
 
     z_value := rl.Vector2{0, 0}
-    itterations: i32 = 500
-    rl.SetShaderValue(shader, z_value_loc, &z_value, .VEC2)
-    rl.SetShaderValue(shader, itter_loc, &itterations, .INT)
+    iterations: i32 = 400.0
 
     for !rl.WindowShouldClose() {
+        dt := rl.GetFrameTime()
 
         if rl.IsMouseButtonDown(.LEFT) {
             delta := rl.GetMouseDelta()
@@ -115,23 +117,41 @@ main :: proc() {
             camera.x -= dx
             camera.y -= dy
         }
-        scroll := rl.GetMouseWheelMove()
+        if rl.IsKeyPressed(.H) {
+            if rl.IsCursorHidden() {
+                rl.ShowCursor()
+            } else {
+                rl.HideCursor()
+            }
+        }
+        if rl.IsKeyPressed(.EQUAL) {
+            iterations += ITER_STEP
+            iterations = min(iterations, MAX_ITER)
+        } else if rl.IsKeyPressed(.MINUS) {
+            iterations -= ITER_STEP
+            iterations = max(iterations, 0)
+        }
 
+        scroll := rl.GetMouseWheelMove()
         if scroll > 0.0 {
             zoom(&camera, ZOOM_FACTOR, 1)
         } else if rl.IsKeyDown(.SPACE) {
-            zoom(&camera, 0.98, 1)
+            zoom(&camera, (1.0 - f64(dt) * 0.5), 1)
         } else if scroll < 0.0 {
             zoom(&camera, ZOOM_FACTOR, -1)
         } else if rl.IsKeyDown(.LEFT_CONTROL) {
-            zoom(&camera, 0.98, -1)
+            zoom(&camera, (1.0 - f64(dt) * 0.6), -1)
         }
+
+        rl.SetShaderValue(shader, z_value_loc, &z_value, .VEC2)
+        rl.SetShaderValue(shader, iter_loc, &iterations, .INT)
 
         rlgl.EnableShader(shader.id)
         gl.Uniform1d(cam_loc_x, camera.x)
         gl.Uniform1d(cam_loc_y, camera.y)
         gl.Uniform1d(cam_loc_w, camera.w)
         gl.Uniform1d(cam_loc_h, camera.h)
+
 
         rl.BeginDrawing()
         rl.ClearBackground(rl.BLACK)
@@ -140,7 +160,36 @@ main :: proc() {
         rl.DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, rl.WHITE)
         rl.EndShaderMode()
 
+
+        // UI
+        // Sliders
+        bar_h: f32 = WINDOW_HEIGHT * 0.04
+        bar_w: f32 = WINDOW_WIDTH * 0.15
+        padding: f32 = bar_h * 0.1
+        x := WINDOW_WIDTH - padding - bar_w
+        y := WINDOW_HEIGHT - 2 * bar_h - 4 * padding
+        rect := rl.Rectangle{x, y, bar_w, bar_h}
+        ret := rl.GuiSlider(rect, "real: ", nil, &z_value.x, -2.0, 2.0) != 0
+        rect.y += bar_h + padding
+        ret = rl.GuiSlider(rect, "imag: ", nil, &z_value.y, -2.0, 2.0) != 0
+
+        size: f32 = WINDOW_WIDTH * 0.05
+        rect = rl.Rectangle {
+            x      = WINDOW_WIDTH - padding - size,
+            y      = padding,
+            width  = size,
+            height = size,
+        }
+
+        if rl.GuiButton(rect, "Toggle Set") {
+            fractal = Fractal((i32(fractal) + 1) % i32(Fractal.Count))
+            rl.SetShaderValue(shader, type_loc, &fractal, .INT)
+            z_value = rl.Vector2(0)
+        }
+
+        // Text
         rl.DrawFPS(10, 10)
+        rl.DrawText(rl.TextFormat("Iterations: %d", iterations), 10, 35, 20, rl.DARKGREEN)
         rl.EndDrawing()
     }
 }

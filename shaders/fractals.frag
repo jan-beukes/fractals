@@ -8,10 +8,15 @@ struct Camera {
     double w, h;
 };
 
+#define MANDLEBROT 0
+#define JULIA_SET 1
+#define BURNING_SHIP 2
+
 layout(location = 1) uniform vec2 res;
 uniform Camera cam;
-uniform int itterations;
+uniform int iterations;
 uniform vec2 zValue;
+uniform int fractalType;
 
 out vec4 finalColor;
 
@@ -33,12 +38,12 @@ vec3 pallete(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 
 #define R 4.0
 
-float iterate(dvec2 p) {
+float iterateMandlebrot(dvec2 p) {
     dvec2 c = p;
     dvec2 z = zValue;
 
     float i;
-    for(i = 0.0; i < itterations; i++) {
+    for(i = 0.0; i < iterations; i++) {
         double real = z.x*z.x - z.y*z.y;
         double imag = 2 * z.x*z.y;
         z = dvec2(real, imag) + c;
@@ -50,13 +55,33 @@ float iterate(dvec2 p) {
     //return i - log(log(dot(z, z)) / log(R)) / log(2.0);
 }
 
+float iterateJulia(dvec2 p) {
+    dvec2 c = zValue;
+    dvec2 z = p;
+
+    float i;
+    for(i = 0.0; i < iterations; i++) {
+        double real = z.x*z.x - z.y*z.y;
+        double imag = 2 * z.x*z.y;
+        z = dvec2(real, imag) + c;
+        if(dot(z, z) > R * R) break;
+    }
+
+    return i;
+}
+
 void main() {
 
     dvec2 point = transformedPoint();
-    float value = iterate(point) / itterations;   
+    float value;
+    if (fractalType == MANDLEBROT) {
+        value = iterateMandlebrot(point) / float(iterations);   
+    } else {
+        value = iterateJulia(point) / iterations;
+    }
 
     vec3 col = pallete(fract(value + 0.5), vec3(0.5), vec3(0.5), 
                    vec3(1), vec3(0.0, 0.1, 0.2));
 
-    finalColor = vec4(value == 1.0 ? vec3(0) : col, 1.0);
+    finalColor = vec4(value >= 0.99 ? vec3(0) : col, 1.0);
 }
